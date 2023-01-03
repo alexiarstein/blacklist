@@ -1,22 +1,30 @@
 #!/bin/bash
-# IP BLACKLISTER - v1.0
-# Author: Alexia Rivera
-# E-Mail: lachicadesistemas@gmail.com
-# Usage: bash blacklist.sh (cron)
-# LICENSE: GNU GPL 3.0
-# ------------------------------------
 
-# REQUIRERE FIREWALLD (sudo apt-get install firewalld)
+# BLACKLISTER v1.5 
+# Autora: Alexia Rivera <lachicadesistemas@gmail.com>
+# https://www.github.com/alexiarstein
+# GNU GPL 3.0
+# ---------------------------------------------------
+# Escanea /var/log/auth.log y banea las IPs de intrusos.
+# Requiere FIREWALLD.
+# ---------------------------------------------------
+# UPDATE:
+# -------
+# Genera un reporte cada hora en /var/log/blacklist/stats.log
+# Que contiene la cantidad de intentos de intrusion.
+# Quizás resulte útil si se desea generar estadisticas o manipular
+# esta data de algún modo u otro.
+# ---------------------------------------------------
 
-# settings
-# RHEL-CENTOS-FEDORA
-# modificar AUTH por /var/log/secure
-# si se desea generar listado de lo antiguo, hacer un for loop a /var/log/secure-*
+# Correr como cronjob (root) cada hora
+#0 * * * * /bin/bash /opt/blacklist/blacklist.sh > /dev/null 2>&1
 
-AUTH="/var/log/auth.log" 
-#--------------------------------------------------------------------------------------
+
+# Si /tmp/blacklist.log existe, lo borramos.
+rm /tmp/blacklist.log
 
 # correr por unica vez - Escanea los backups y obtiene las IPs.
+# Luego comentar.
 for i in /var/log/auth.log.*.gz; do zcat $i | grep "Failed password for invalid user" | awk '{print $13}' >> /tmp/tmp_auth_unsorted.log ; done
 for i in /var/log/auth.log.*.gz; do zcat $i | grep "Failed password for root from" | awk '{print $11}' >> /tmp/tmp_auth_unsorted.log; done
 grep "Failed password for invalid user" /var/log/auth.log.1 | awk '{print $13}' >> /tmp/tmp_auth_unsorted.log
@@ -28,8 +36,8 @@ grep "Failed password for root from" /var/log/auth.log.1 | awk '{print $11}' >> 
 grep "<source address=" /etc/firewalld/zones/public.xml | sed 's/"/,/g' | awk -F ',' '{print $2}'  > /tmp/tmp_zones_public.log
 
 # Luego generamos un nuevo listado con lo que haya en /var/log/auth.log
-grep "Failed password for invalid user" $AUTH | awk '{print $13}' >> /tmp/tmp_auth_unsorted.log
-grep "Failed password for root from" $AUTH | awk '{print $11}' >> /tmp/tmp_auth_unsorted.log
+grep "Failed password for invalid user" /var/log/auth.log | awk '{print $13}' >> /tmp/tmp_auth_unsorted.log
+grep "Failed password for root from" /var/log/auth.log | awk '{print $11}' >> /tmp/tmp_auth_unsorted.log
 
 # Eliminamos los duplicados, ya que una misma IP puede haber intentado pegarle al root u otro user inexistente.
 
@@ -50,8 +58,10 @@ done < /tmp/tmp_auth.log
 
 while IFS= read -r line
 do
+    # Check if the line appears in the second file
     if ! grep -q "$line" /tmp/tmp_zones_public.log
     then
+        # If not, print the line
         echo "$line" >> /tmp/blacklist.log
     fi
 done < /tmp/tmp_firewall.log
@@ -61,5 +71,7 @@ rm /tmp/tmp_*
 while read i; do
 echo -ne "Adding $i to blacklist: "
 firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='$i' reject"; done < /tmp/blacklist.log
-# terminado el loopeo recargamos las reglas del FW.
 firewall-cmd --reload
+conteo=$(echo $(date) | awk '{print $4"-"$3"-"$1"-"$5 $6}')
+intrusiones=$(wc -l /tmp/blacklist.log | awk '{print $1}')
+echo "$conteo | ${intrusiones} Intentos de Intrusión bloqueados" >> /var/log/blacklist/stats.log
